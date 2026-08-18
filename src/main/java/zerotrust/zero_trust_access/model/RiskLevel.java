@@ -1,5 +1,7 @@
 package zerotrust.zero_trust_access.model;
 
-public class RiskLevel {
-
+public enum RiskLevel {
+    LOW,
+    MEDIUM,
+    HIGH;
 }
