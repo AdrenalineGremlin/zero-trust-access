@@ -8,11 +8,13 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
 @EnableWebSecurity
 @Configuration
 public class SecurityConfig {
 
+    private final SessionAuthFilter sessionAuthFilter;
     private final SessionService sessionService;
 
     @Bean
@@ -29,13 +31,15 @@ public class SecurityConfig {
         http.csrf(csrf -> csrf.disable())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth.requestMatchers("/auth/login", "/auth/register")
-                        .permitAll().anyRequest().authenticated());
+                        .permitAll().anyRequest().authenticated())
+                .addFilterBefore(sessionAuthFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
 
     }
 
-    public SecurityConfig(SessionService sessionService) {
+    public SecurityConfig(SessionService sessionService, SessionAuthFilter sessionAuthFilter) {
         this.sessionService = sessionService;
+        this.sessionAuthFilter = sessionAuthFilter;
     }
 }
