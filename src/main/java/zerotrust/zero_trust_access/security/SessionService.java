@@ -20,6 +20,7 @@ public class SessionService {
         return generatedSessionToken;
     }
 
+    // look up session
     public String validateSession(String token) {
         // return null if no token found or expired
         if (token == null)
