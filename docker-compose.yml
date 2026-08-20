@@ -1,0 +1,52 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: zt-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: zero_trust
+      POSTGRES_USER: zt_admin
+      POSTGRES_PASSWORD: change_me_locally
+    ports:
+      - "5434:5432"
+    volumes:
+      - zt-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zt_admin -d zero_trust"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: zt-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: zt-app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8083:8083"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/zero_trust
+      SPRING_DATASOURCE_USERNAME: zt_admin
+      SPRING_DATASOURCE_PASSWORD: change_me_locally
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+
+volumes:
+  zt-postgres-data:
