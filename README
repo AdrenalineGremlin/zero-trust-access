@@ -1,0 +1,113 @@
+# Zero-Trust Access Control
+
+A Java/Spring Boot authentication system built around "never trust, always verify" — instead of trusting a login for its entire session lifetime (like a typical JWT setup), every login is evaluated for risk based on current context, and unfamiliar or stale sessions have to prove themselves again before getting in.
+
+## How it works
+
+- **Familiar device + familiar location + verified recently** → low risk, straight in, no friction
+- **Anything unfamiliar** (new device, new location, or more than 30 minutes since last verification) → medium risk, TOTP code required before proceeding
+- **Wrong or missing TOTP code** → denied
+
+Passing the TOTP challenge doesn't just let you in once — it also updates your known device/location and verification timestamp, so your next login (within the freshness window) skips the challenge.
+
+## lay out 
+
+```
+controller/   - HTTP request handling only
+service/      - AuthService: register, login, MFA verification (ties everything together)
+security/     - PolicyEngine (risk decision logic), MfaService (TOTP), SessionService (Redis sessions),
+                SessionAuthFilter (per-request auth), SecurityConfig
+repository/   - UserRepository
+model/        - User, RiskContext, RiskLevel, LoginResult
+DTO/          - AuthRequest, LoginRequest, MfaRequest
+```
+
+## decisions 
+
+- **Sessions are Redis-backed, not JWT.** A JWT can't be revoked before it expires — the server has no record of it. A Redis session can be deleted immediately, which matters for a zero-trust system where you might need to cut a session short.
+- **Device/location signals are real but client-supplied**, not looked up via IP geolocation. The client sends `deviceId`/`location` as part of the request, the risk logic genuinely evaluates them, it's just not doing its own network lookup to get them. Scoped this way  to keep the project focused on the risk-evaluation logic itself.
+- **Risk evaluation is null-safe everywhere.** A brand-new user has no known device/location/verification history — every check in `PolicyEngine` explicitly handles that instead of assuming data exists.
+- **A successful MFA challenge counts as `LOW` risk going forward**, not just a one-time pass — it updates the same known-device/location baseline a normal low-risk login would.
+
+## Stack
+
+Java 21, Spring Boot, Spring Security, Spring Data JPA, Redis, PostgreSQL, TOTP (dev.samstevens.totp), Docker Compose.
+
+## Running it
+
+Needs Docker Desktop.
+
+```bash
+docker-compose up --build
+```
+
+Starts Postgres, Redis, and the app together. API runs on `http://localhost:8083`.
+
+## Endpoints
+
+| Method | Endpoint | Auth required | What it does |
+|---|---|---|---|
+| POST | `/auth/register` | No | Creates an account, returns a TOTP secret (for authenticator app setup) |
+| POST | `/auth/login` | No | Attempts login; returns a session token if low risk, or `MEDIUM` if MFA is needed |
+| POST | `/auth/verify-mfa` | No | Submits a TOTP code; on success, returns a session token |
+
+## Demo
+
+1. Register
+
+POST http://localhost:8083/auth/register
+Body (raw, JSON):
+{
+  "username": "alice",
+  "rawpassword": "testpass123"
+}
+
+Response is a plain string — the TOTP secret. Save it (needed for every code you generate below).
+
+2. First login attempt (comes back MEDIUM — brand new user, nothing familiar yet)
+
+POST http://localhost:8083/auth/login
+Body (raw, JSON):
+{
+  "username": "alice",
+  "rawPassword": "testpass123",
+  "deviceId": "laptop-001",
+  "location": "Miami-FL"
+}
+
+Response: {"riskLevel": "MEDIUM", "sessionToken": null}
+
+3. Generate a TOTP code from the secret saved in step 1, using any TOTP code generator
+
+4. Submit the code to verify-mfa
+
+POST http://localhost:8083/auth/verify-mfa
+Body (raw, JSON):
+{
+  "username": "alice",
+  "code": "<the 6-digit code from step 3>",
+  "deviceId": "laptop-001",
+  "location": "Miami-FL"
+}
+
+Response: {"riskLevel": "LOW", "sessionToken": "<a UUID>"} — this also updates the known device/location baseline.
+
+5. Log in again immediately, same device/location (comes back LOW directly, no MFA needed, since you're inside the 30-minute freshness window)
+
+POST http://localhost:8083/auth/login
+Body (raw, JSON):
+{
+  "username": "alice",
+  "rawPassword": "testpass123",
+  "deviceId": "laptop-001",
+  "location": "Miami-FL"
+}
+
+Response: {"riskLevel": "LOW", "sessionToken": "<a UUID>"}
+
+6. Wait 30+ minutes, then log in again with the same device/location — comes back MEDIUM again, since the verification is now stale and needs to be re-proven via steps 3-4.
+
+## Still to do
+
+- No admin endpoint to revoke a session early (the mechanism — deleting a Redis key — exists in `SessionService`, just no endpoint exposes it yet)
+- Same as the other two projects: failures currently throw generic exceptions rather than typed ones mapped to specific HTTP status codes
